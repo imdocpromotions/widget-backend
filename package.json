@@ -10,6 +10,7 @@
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "kick-live-connector": "^1.0.0",
+    "mongoose": "^9.7.0",
     "node-cron": "^3.0.3",
     "socket.io": "^4.7.5",
     "tmi.js": "^1.8.5",
