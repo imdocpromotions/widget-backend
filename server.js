@@ -31,7 +31,6 @@ const UserScore = mongoose.model('UserScore', new mongoose.Schema({
     score: Number
 }));
 
-// Load saved scores on startup
 UserScore.find().then(users => {
     users.forEach(u => {
         trackingData[u.username] = u.score;
@@ -39,34 +38,45 @@ UserScore.find().then(users => {
     console.log("Loaded saved leaderboard data from the cloud.");
 }).catch(console.error);
 
-// Sync memory to database every 60 seconds
 setInterval(async () => {
     if (!MONGO_URI || Object.keys(trackingData).length === 0) return;
     
     const bulkOps = Object.entries(trackingData).map(([username, score]) => ({
-        updateOne: {
-            filter: { username },
-            update: { username, score },
-            upsert: true
-        }
+        updateOne: { filter: { username }, update: { username, score }, upsert: true }
     }));
     
-    try {
-        await UserScore.bulkWrite(bulkOps);
-    } catch (error) {
-        console.error("Error saving to database:", error);
-    }
+    try { await UserScore.bulkWrite(bulkOps); } 
+    catch (error) { console.error("Error saving to database:", error); }
 }, 60000);
-// ------------------------------
 
-function processMessage(user) {
+// --- DUAL-PROCESSING LOGIC (Leaderboard + TTS) ---
+function processMessage(user, messageContent) {
     const cleanUser = user.toLowerCase().trim();
     if (defaultIgnored.includes(cleanUser)) return;
     
+    // 1. Update Leaderboard
     trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
-    
     const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
     io.emit('updateLeaderboard', top3);
+
+    // 2. Check for TTS Commands
+    if (messageContent) {
+        const text = messageContent.trim();
+        if (text.startsWith('!')) {
+            const parts = text.split(' ');
+            const command = parts[0].toLowerCase(); // e.g., "!trump"
+            const spokenText = parts.slice(1).join(' '); // The message after the command
+
+            const validVoices = ['!speed', '!trump', '!kanye'];
+            
+            // If it's a valid command and they actually typed a message
+            if (validVoices.includes(command) && spokenText.length > 0) {
+                const voiceName = command.replace('!', ''); // strips the "!" to just send "trump"
+                io.emit('triggerTTS', { user: cleanUser, voice: voiceName, text: spokenText });
+                console.log(`TTS Triggered: ${cleanUser} as ${voiceName} -> ${spokenText}`);
+            }
+        }
+    }
 }
 
 // TWITCH CLIENT SETUP
@@ -75,36 +85,29 @@ twitchClient.connect().catch(console.error);
 
 twitchClient.on('message', (channel, tags, message, self) => {
     if (self) return;
-    processMessage(tags.username);
+    processMessage(tags.username, message); // Passes the actual message text now
 });
 
-// NATIVE KICK CHAT (Pure WebSocket - No Crashes)
+// NATIVE KICK CHAT (Pure WebSocket)
 const KICK_CHATROOM_ID = '386930'; 
 const kickWs = new WebSocket('wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false');
 
 kickWs.on('open', () => {
-    kickWs.send(JSON.stringify({
-        event: "pusher:subscribe",
-        data: { auth: "", channel: `chatrooms.${KICK_CHATROOM_ID}.v2` }
-    }));
-    console.log("Successfully bypassed Cloudflare & connected to Kick Chat!");
+    kickWs.send(JSON.stringify({ event: "pusher:subscribe", data: { auth: "", channel: `chatrooms.${KICK_CHATROOM_ID}.v2` } }));
+    console.log("Successfully connected to Kick Chat!");
 });
 
 kickWs.on('message', (raw) => {
     try {
         const msg = JSON.parse(raw);
-        
-        // Pusher keep-alive ping/pong
         if (msg.event === 'pusher:ping') {
             kickWs.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
             return;
         }
-
-        // Parse Kick chat message
         if (msg.event === 'App\\Events\\ChatMessageEvent') {
             const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
-            if (payload.sender && payload.sender.username) {
-                processMessage(payload.sender.username);
+            if (payload.sender && payload.sender.username && payload.content) {
+                processMessage(payload.sender.username, payload.content); // Passes Kick text
             }
         }
     } catch (err) {
@@ -112,26 +115,14 @@ kickWs.on('message', (raw) => {
     }
 });
 
-kickWs.on('close', () => console.log("Kick websocket disconnected."));
-kickWs.on('error', (err) => console.error("Kick websocket error:", err));
-// ------------------------------
-
 io.on('connection', (socket) => {
     const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
     socket.emit('updateLeaderboard', top3);
 });
 
-// Weekly Reset (Monday at Midnight)
 cron.schedule('0 0 * * 1', async () => { 
     trackingData = {}; 
-    if (MONGO_URI) {
-        try {
-            await UserScore.deleteMany({});
-            console.log("Weekly reset: Cloud database wiped.");
-        } catch (err) {
-            console.error("Error wiping database:", err);
-        }
-    }
+    if (MONGO_URI) { try { await UserScore.deleteMany({}); } catch (err) {} }
     io.emit('updateLeaderboard', []); 
 });
 
