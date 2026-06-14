@@ -5,6 +5,7 @@ const tmi = require('tmi.js');
 const cron = require('node-cron');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const WebSocket = require('ws'); 
 
 const app = express();
 app.use(cors());
@@ -77,40 +78,42 @@ twitchClient.on('message', (channel, tags, message, self) => {
     processMessage(tags.username);
 });
 
-// NATIVE KICK CHAT (Bypasses Cloudflare)
+// NATIVE KICK CHAT (Pure WebSocket - No Crashes)
 const KICK_CHATROOM_ID = '386930'; 
+const kickWs = new WebSocket('wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false');
 
-// Dynamic Import Fix for Node.js ES Module Clash
-(async () => {
+kickWs.on('open', () => {
+    kickWs.send(JSON.stringify({
+        event: "pusher:subscribe",
+        data: { auth: "", channel: `chatrooms.${KICK_CHATROOM_ID}.v2` }
+    }));
+    console.log("Successfully bypassed Cloudflare & connected to Kick Chat!");
+});
+
+kickWs.on('message', (raw) => {
     try {
-        const pusherModule = await import('pusher-js');
-        const PusherClient = pusherModule.default || pusherModule;
+        const msg = JSON.parse(raw);
+        
+        // Pusher keep-alive ping/pong
+        if (msg.event === 'pusher:ping') {
+            kickWs.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
+            return;
+        }
 
-        const pusher = new PusherClient('32cbd69e4b950bf97679', {
-            cluster: 'us2',
-            forceTLS: true
-        });
-
-        const kickChannel = pusher.subscribe(`chatrooms.${KICK_CHATROOM_ID}.v2`);
-
-        kickChannel.bind('App\\Events\\ChatMessageEvent', (data) => {
-            try {
-                const messageData = typeof data === 'string' ? JSON.parse(data) : data;
-                if (messageData.sender && messageData.sender.username) {
-                    processMessage(messageData.sender.username);
-                }
-            } catch (err) {
-                console.error("Error parsing Kick message:", err);
+        // Parse Kick chat message
+        if (msg.event === 'App\\Events\\ChatMessageEvent') {
+            const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
+            if (payload.sender && payload.sender.username) {
+                processMessage(payload.sender.username);
             }
-        });
-
-        kickChannel.bind('pusher:subscription_succeeded', () => {
-            console.log("Successfully bypassed Cloudflare & connected to Kick Chat!");
-        });
+        }
     } catch (err) {
-        console.error("Failed to load or connect Pusher:", err);
+        console.error("Error parsing Kick websocket message:", err);
     }
-})();
+});
+
+kickWs.on('close', () => console.log("Kick websocket disconnected."));
+kickWs.on('error', (err) => console.error("Kick websocket error:", err));
 // ------------------------------
 
 io.on('connection', (socket) => {
