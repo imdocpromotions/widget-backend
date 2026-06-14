@@ -64,14 +64,14 @@ function processMessage(user, messageContent) {
         const text = messageContent.trim();
         if (text.startsWith('!')) {
             const parts = text.split(' ');
-            const command = parts[0].toLowerCase(); // e.g., "!trump"
-            const spokenText = parts.slice(1).join(' '); // The message after the command
+            const command = parts[0].toLowerCase(); 
+            const spokenText = parts.slice(1).join(' '); 
 
             const validVoices = ['!speed', '!trump', '!kanye'];
             
             // If it's a valid command and they actually typed a message
             if (validVoices.includes(command) && spokenText.length > 0) {
-                const voiceName = command.replace('!', ''); // strips the "!" to just send "trump"
+                const voiceName = command.replace('!', ''); 
                 io.emit('triggerTTS', { user: cleanUser, voice: voiceName, text: spokenText });
                 console.log(`TTS Triggered: ${cleanUser} as ${voiceName} -> ${spokenText}`);
             }
@@ -85,7 +85,7 @@ twitchClient.connect().catch(console.error);
 
 twitchClient.on('message', (channel, tags, message, self) => {
     if (self) return;
-    processMessage(tags.username, message); // Passes the actual message text now
+    processMessage(tags.username, message); 
 });
 
 // NATIVE KICK CHAT (Pure WebSocket)
@@ -107,7 +107,7 @@ kickWs.on('message', (raw) => {
         if (msg.event === 'App\\Events\\ChatMessageEvent') {
             const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
             if (payload.sender && payload.sender.username && payload.content) {
-                processMessage(payload.sender.username, payload.content); // Passes Kick text
+                processMessage(payload.sender.username, payload.content); 
             }
         }
     } catch (err) {
