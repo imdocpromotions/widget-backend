@@ -52,14 +52,8 @@ setInterval(async () => {
 // --- DUAL-PROCESSING LOGIC (Leaderboard + TTS) ---
 function processMessage(user, messageContent) {
     const cleanUser = user.toLowerCase().trim();
-    if (defaultIgnored.includes(cleanUser)) return;
     
-    // 1. Update Leaderboard
-    trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
-    const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
-    io.emit('updateLeaderboard', top3);
-
-    // 2. Check for TTS Commands
+    // 1. Check for TTS Commands FIRST (So you and bots can still trigger them)
     if (messageContent) {
         const text = messageContent.trim();
         if (text.startsWith('!')) {
@@ -69,7 +63,6 @@ function processMessage(user, messageContent) {
 
             const validVoices = ['!speed', '!trump', '!kanye'];
             
-            // If it's a valid command and they actually typed a message
             if (validVoices.includes(command) && spokenText.length > 0) {
                 const voiceName = command.replace('!', ''); 
                 io.emit('triggerTTS', { user: cleanUser, voice: voiceName, text: spokenText });
@@ -77,6 +70,14 @@ function processMessage(user, messageContent) {
             }
         }
     }
+
+    // 2. Stop here if the user is ignored (Prevents streamer/bots from hitting leaderboard)
+    if (defaultIgnored.includes(cleanUser)) return;
+    
+    // 3. Update Leaderboard
+    trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
+    const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
+    io.emit('updateLeaderboard', top3);
 }
 
 // TWITCH CLIENT SETUP
