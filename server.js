@@ -1,114 +1,131 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI TTS Alerts</title>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <style>
-        body { 
-            margin: 0; 
-            overflow: hidden; 
-            width: 100vw; 
-            height: 100vh; /* Forces the browser to recognize the full screen height */
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const tmi = require('tmi.js');
+const cron = require('node-cron');
+const cors = require('cors');
+const mongoose = require('mongoose');
+const WebSocket = require('ws'); 
+
+const app = express();
+app.use(cors());
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
+let trackingData = {}; 
+const defaultIgnored = ['imdoclive', 'botrix', 'botrixoficial', '@botrixoficial', 'kickbot', 'hugomcnut', 'missxss'];
+
+// --- MongoDB Database Setup ---
+const MONGO_URI = process.env.MONGO_URI; 
+
+if (MONGO_URI) {
+    mongoose.connect(MONGO_URI)
+        .then(() => console.log('Successfully connected to MongoDB Cloud Database.'))
+        .catch(err => console.error('MongoDB connection error:', err));
+} else {
+    console.warn("WARNING: No MONGO_URI found. Data will not be saved permanently.");
+}
+
+const UserScore = mongoose.model('UserScore', new mongoose.Schema({
+    username: String,
+    score: Number
+}));
+
+UserScore.find().then(users => {
+    users.forEach(u => {
+        trackingData[u.username] = u.score;
+    });
+    console.log("Loaded saved leaderboard data from the cloud.");
+}).catch(console.error);
+
+setInterval(async () => {
+    if (!MONGO_URI || Object.keys(trackingData).length === 0) return;
+    
+    const bulkOps = Object.entries(trackingData).map(([username, score]) => ({
+        updateOne: { filter: { username }, update: { username, score }, upsert: true }
+    }));
+    
+    try { await UserScore.bulkWrite(bulkOps); } 
+    catch (error) { console.error("Error saving to database:", error); }
+}, 60000);
+
+// --- DUAL-PROCESSING LOGIC (Leaderboard + TTS) ---
+function processMessage(user, messageContent) {
+    const cleanUser = user.toLowerCase().trim();
+    
+    // 1. Check for TTS Commands FIRST (So you and bots can still trigger them)
+    if (messageContent) {
+        const text = messageContent.trim();
+        if (text.startsWith('!')) {
+            const parts = text.split(' ');
+            const command = parts[0].toLowerCase(); 
+            const spokenText = parts.slice(1).join(' '); 
+
+            const validVoices = ['!speed', '!trump', '!kanye'];
+            
+            if (validVoices.includes(command) && spokenText.length > 0) {
+                const voiceName = command.replace('!', ''); 
+                io.emit('triggerTTS', { user: cleanUser, voice: voiceName, text: spokenText });
+                console.log(`TTS Triggered: ${cleanUser} as ${voiceName} -> ${spokenText}`);
+            }
         }
-        
-        #tts-popup {
-            position: absolute;
-            bottom: 40px;
-            left: 50%;
-            transform: translateX(-50%) translateY(200px); 
-            background: rgba(10, 10, 14, 0.9);
-            border: 2px solid #a970ff;
-            box-shadow: 0 0 20px rgba(169, 112, 255, 0.5);
-            border-radius: 12px;
-            padding: 15px 25px;
-            color: white;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            opacity: 0;
-            transition: all 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            z-index: 9999; /* Guarantees it sits on top of everything */
+    }
+
+    // 2. Stop here if the user is ignored (Prevents streamer/bots from hitting leaderboard)
+    if (defaultIgnored.includes(cleanUser)) return;
+    
+    // 3. Update Leaderboard
+    trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
+    const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
+    io.emit('updateLeaderboard', top3);
+}
+
+// TWITCH CLIENT SETUP
+const twitchClient = new tmi.Client({ identity: { username: 'justinfan12345' }, channels: ['imdoclive'] });
+twitchClient.connect().catch(console.error);
+
+twitchClient.on('message', (channel, tags, message, self) => {
+    if (self) return;
+    processMessage(tags.username, message); 
+});
+
+// NATIVE KICK CHAT (Pure WebSocket)
+const KICK_CHATROOM_ID = '386930'; 
+const kickWs = new WebSocket('wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false');
+
+kickWs.on('open', () => {
+    kickWs.send(JSON.stringify({ event: "pusher:subscribe", data: { auth: "", channel: `chatrooms.${KICK_CHATROOM_ID}.v2` } }));
+    console.log("Successfully connected to Kick Chat!");
+});
+
+kickWs.on('message', (raw) => {
+    try {
+        const msg = JSON.parse(raw);
+        if (msg.event === 'pusher:ping') {
+            kickWs.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
+            return;
         }
-
-        #tts-popup.show {
-            transform: translateX(-50%) translateY(0);
-            opacity: 1;
+        if (msg.event === 'App\\Events\\ChatMessageEvent') {
+            const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
+            if (payload.sender && payload.sender.username && payload.content) {
+                processMessage(payload.sender.username, payload.content); 
+            }
         }
+    } catch (err) {
+        console.error("Error parsing Kick websocket message:", err);
+    }
+});
 
-        .icon { font-size: 28px; }
-        .details { display: flex; flex-direction: column; }
-        .title { font-size: 12px; color: #a970ff; text-transform: uppercase; font-weight: 800; letter-spacing: 1px; }
-        .user { font-size: 18px; font-weight: bold; }
-    </style>
-</head>
-<body>
+io.on('connection', (socket) => {
+    const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
+    socket.emit('updateLeaderboard', top3);
+});
 
-    <div id="tts-popup">
-        <div class="icon">🎙️</div>
-        <div class="details">
-            <span class="title" id="voice-label">Now Speaking: KANYE</span>
-            <span class="user" id="user-label">Username</span>
-        </div>
-    </div>
+cron.schedule('0 0 * * 1', async () => { 
+    trackingData = {}; 
+    if (MONGO_URI) { try { await UserScore.deleteMany({}); } catch (err) {} }
+    io.emit('updateLeaderboard', []); 
+});
 
-    <script>
-        const BACKEND_URL = 'https://widget-backend-y2d1.onrender.com';
-        const socket = io(BACKEND_URL);
-        const popup = document.getElementById('tts-popup');
-        const voiceLabel = document.getElementById('voice-label');
-        const userLabel = document.getElementById('user-label');
-
-        let isPlaying = false;
-        let queue = [];
-
-        socket.on('triggerTTS', (data) => {
-            queue.push(data);
-            if (!isPlaying) processQueue();
-        });
-
-        async function processQueue() {
-            if (queue.length === 0) return;
-            isPlaying = true;
-            
-            const current = queue.shift();
-            
-            // Update text
-            voiceLabel.innerText = `Speaking: ${current.voice.toUpperCase()}`;
-            userLabel.innerText = current.user;
-            
-            // Trigger the visual slide-up
-            popup.classList.add('show');
-
-            // CRITICAL: Wait 600ms for the animation to finish BEFORE starting the audio
-            await new Promise(r => setTimeout(r, 600));
-            
-            await new Promise((resolve) => {
-                const utterance = new SpeechSynthesisUtterance(current.text);
-                
-                if (current.voice === 'speed') { utterance.pitch = 1.5; utterance.rate = 1.3; }
-                if (current.voice === 'trump') { utterance.pitch = 0.8; utterance.rate = 0.9; }
-                if (current.voice === 'kanye') { utterance.pitch = 0.5; utterance.rate = 1.0; }
-
-                utterance.onend = resolve;
-                utterance.onerror = resolve; // Failsafe in case the browser blocks it
-                window.speechSynthesis.speak(utterance);
-            });
-
-            // CRITICAL: Wait 2 full seconds AFTER the audio finishes before hiding the popup
-            await new Promise(r => setTimeout(r, 2000));
-            
-            // Slide down
-            popup.classList.remove('show');
-            
-            // Wait 1 second before pulling the next message in the queue
-            setTimeout(() => {
-                isPlaying = false;
-                processQueue();
-            }, 1000);
-        }
-    </script>
-</body>
-</html>
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
