@@ -81,7 +81,10 @@ twitchClient.on('message', (channel, tags, message, self) => {
 // NATIVE KICK CHAT (Bypasses Cloudflare)
 const KICK_CHATROOM_ID = '386930'; 
 
-const pusher = new Pusher('32cbd69e4b950bf97679', {
+// Fix for Node.js import differences
+const PusherClient = Pusher.default || Pusher;
+
+const pusher = new PusherClient('32cbd69e4b950bf97679', {
     cluster: 'us2',
     forceTLS: true
 });
@@ -90,7 +93,6 @@ const kickChannel = pusher.subscribe(`chatrooms.${KICK_CHATROOM_ID}.v2`);
 
 kickChannel.bind('App\\Events\\ChatMessageEvent', (data) => {
     try {
-        // Kick sends the payload as a stringified JSON object via Pusher
         const messageData = typeof data === 'string' ? JSON.parse(data) : data;
         if (messageData.sender && messageData.sender.username) {
             processMessage(messageData.sender.username);
