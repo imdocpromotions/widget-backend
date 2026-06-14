@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const tmi = require('tmi.js');
-const { KickConnection, Events } = require('kick-live-connector');
+const Pusher = require('pusher-js');
 const cron = require('node-cron');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -59,12 +59,6 @@ setInterval(async () => {
 }, 60000);
 // ------------------------------
 
-const twitchClient = new tmi.Client({ identity: { username: 'justinfan12345' }, channels: ['imdoclive'] });
-twitchClient.connect().catch(console.error);
-
-const kickClient = new KickConnection('imdoclive');
-kickClient.connect().catch(console.error);
-
 function processMessage(user) {
     const cleanUser = user.toLowerCase().trim();
     if (defaultIgnored.includes(cleanUser)) return;
@@ -75,14 +69,41 @@ function processMessage(user) {
     io.emit('updateLeaderboard', top3);
 }
 
+// TWITCH CLIENT SETUP
+const twitchClient = new tmi.Client({ identity: { username: 'justinfan12345' }, channels: ['imdoclive'] });
+twitchClient.connect().catch(console.error);
+
 twitchClient.on('message', (channel, tags, message, self) => {
     if (self) return;
     processMessage(tags.username);
 });
 
-kickClient.on(Events.ChatMessage, (data) => {
-    processMessage(data.sender.username);
+// NATIVE KICK CHAT (Bypasses Cloudflare)
+const KICK_CHATROOM_ID = '386930'; 
+
+const pusher = new Pusher('32cbd69e4b950bf97679', {
+    cluster: 'us2',
+    forceTLS: true
 });
+
+const kickChannel = pusher.subscribe(`chatrooms.${KICK_CHATROOM_ID}.v2`);
+
+kickChannel.bind('App\\Events\\ChatMessageEvent', (data) => {
+    try {
+        // Kick sends the payload as a stringified JSON object via Pusher
+        const messageData = typeof data === 'string' ? JSON.parse(data) : data;
+        if (messageData.sender && messageData.sender.username) {
+            processMessage(messageData.sender.username);
+        }
+    } catch (err) {
+        console.error("Error parsing Kick message:", err);
+    }
+});
+
+kickChannel.bind('pusher:subscription_succeeded', () => {
+    console.log("Successfully bypassed Cloudflare & connected to Kick Chat!");
+});
+// ------------------------------
 
 io.on('connection', (socket) => {
     const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
