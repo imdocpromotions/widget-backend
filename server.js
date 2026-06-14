@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const tmi = require('tmi.js');
-const Pusher = require('pusher-js');
 const cron = require('node-cron');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -81,30 +80,37 @@ twitchClient.on('message', (channel, tags, message, self) => {
 // NATIVE KICK CHAT (Bypasses Cloudflare)
 const KICK_CHATROOM_ID = '386930'; 
 
-// Fix for Node.js import differences
-const PusherClient = Pusher.default || Pusher;
-
-const pusher = new PusherClient('32cbd69e4b950bf97679', {
-    cluster: 'us2',
-    forceTLS: true
-});
-
-const kickChannel = pusher.subscribe(`chatrooms.${KICK_CHATROOM_ID}.v2`);
-
-kickChannel.bind('App\\Events\\ChatMessageEvent', (data) => {
+// Dynamic Import Fix for Node.js ES Module Clash
+(async () => {
     try {
-        const messageData = typeof data === 'string' ? JSON.parse(data) : data;
-        if (messageData.sender && messageData.sender.username) {
-            processMessage(messageData.sender.username);
-        }
-    } catch (err) {
-        console.error("Error parsing Kick message:", err);
-    }
-});
+        const pusherModule = await import('pusher-js');
+        const PusherClient = pusherModule.default || pusherModule;
 
-kickChannel.bind('pusher:subscription_succeeded', () => {
-    console.log("Successfully bypassed Cloudflare & connected to Kick Chat!");
-});
+        const pusher = new PusherClient('32cbd69e4b950bf97679', {
+            cluster: 'us2',
+            forceTLS: true
+        });
+
+        const kickChannel = pusher.subscribe(`chatrooms.${KICK_CHATROOM_ID}.v2`);
+
+        kickChannel.bind('App\\Events\\ChatMessageEvent', (data) => {
+            try {
+                const messageData = typeof data === 'string' ? JSON.parse(data) : data;
+                if (messageData.sender && messageData.sender.username) {
+                    processMessage(messageData.sender.username);
+                }
+            } catch (err) {
+                console.error("Error parsing Kick message:", err);
+            }
+        });
+
+        kickChannel.bind('pusher:subscription_succeeded', () => {
+            console.log("Successfully bypassed Cloudflare & connected to Kick Chat!");
+        });
+    } catch (err) {
+        console.error("Failed to load or connect Pusher:", err);
+    }
+})();
 // ------------------------------
 
 io.on('connection', (socket) => {
