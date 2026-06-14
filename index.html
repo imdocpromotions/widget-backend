@@ -47,6 +47,12 @@
             width: 100%;
         }
 
+        .title-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
         h1 {
             margin: 0;
             font-size: 32px;
@@ -68,6 +74,15 @@
         .crown-glow {
             filter: drop-shadow(0px 2px 8px var(--primary-glow));
             font-size: 36px;
+        }
+
+        .subtitle {
+            font-size: 13px;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.6);
+            margin-top: 4px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
         }
 
         .live-indicator {
@@ -131,7 +146,10 @@
 
     <div class="widget-container">
         <div class="header-row">
-            <h1><span class="crown-glow">👑</span> <span class="title-text">OF CHAT</span></h1>
+            <div class="title-container">
+                <h1><span class="crown-glow">👑</span> <span class="title-text">OF CHAT</span></h1>
+                <div class="subtitle">(Weekly)</div>
+            </div>
             <div class="live-indicator"></div>
         </div>
         <ul class="chatter-list" id="leaderboard">
@@ -154,7 +172,7 @@
         });
 
         socket.on('updateLeaderboard', (top3) => {
-            console.log('Leaderboard data received:', top3); // DEBUG LOG
+            console.log('Leaderboard data received:', top3); 
             
             if (!top3 || top3.length === 0) {
                 listElement.innerHTML = '<li class="status-msg">No chats yet...</li>';
