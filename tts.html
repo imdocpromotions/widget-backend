@@ -3,107 +3,132 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI TTS Alerts</title>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <title>Stream TTS Overlay</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
-        body { 
-            margin: 0; 
-            overflow: hidden; 
-            width: 100vw; 
-            height: 100vh; 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent; /* Kept transparent for OBS Browser Source */
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
         }
-        
-        #tts-popup {
+
+        #tts-alert-container {
             position: absolute;
-            bottom: 40px;
-            left: 50%;
-            transform: translateX(-50%) translateY(200px); 
-            background: rgba(10, 10, 14, 0.9);
-            border: 2px solid #a970ff;
-            box-shadow: 0 0 20px rgba(169, 112, 255, 0.5);
-            border-radius: 12px;
-            padding: 15px 25px;
-            color: white;
+            bottom: 20px;
+            left: 20px;
             display: flex;
-            align-items: center;
-            gap: 15px;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: none;
+        }
+
+        .tts-alert {
+            background: rgba(0, 0, 0, 0.85);
+            color: #ffffff;
+            padding: 15px 25px;
+            border-radius: 8px;
+            border-left: 5px solid #ff4e00; 
+            font-size: 18px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
             opacity: 0;
-            transition: all 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            z-index: 9999; 
+            transform: translateX(-50px);
+            transition: all 0.4s ease-in-out;
+            max-width: 400px;
+            word-wrap: break-word;
         }
 
-        #tts-popup.show {
-            transform: translateX(-50%) translateY(0);
+        .tts-alert.show {
             opacity: 1;
+            transform: translateX(0);
         }
 
-        .icon { font-size: 28px; }
-        .details { display: flex; flex-direction: column; }
-        .title { font-size: 12px; color: #a970ff; text-transform: uppercase; font-weight: 800; letter-spacing: 1px; }
-        .user { font-size: 18px; font-weight: bold; }
+        .voice-name {
+            color: #ffca28; 
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .username {
+            color: #00e676;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
 
-    <div id="tts-popup">
-        <div class="icon">🎙️</div>
-        <div class="details">
-            <span class="title" id="voice-label">Now Speaking</span>
-            <span class="user" id="user-label">Username</span>
-        </div>
-    </div>
+    <div id="tts-alert-container"></div>
 
     <script>
-        const BACKEND_URL = 'https://widget-backend-y2d1.onrender.com';
+        // CHANGE THIS to your live backend URL on Render (e.g., https://your-app.onrender.com)
+        // Leave it as "/" if the HTML file is being hosted directly by the same Node server.
+        const BACKEND_URL = "/"; 
+
         const socket = io(BACKEND_URL);
-        const popup = document.getElementById('tts-popup');
-        const voiceLabel = document.getElementById('voice-label');
-        const userLabel = document.getElementById('user-label');
-
+        
+        let audioQueue = [];
         let isPlaying = false;
-        let queue = [];
 
-        socket.on('triggerTTS', (data) => {
-            queue.push(data);
-            if (!isPlaying) processQueue();
+        console.log("Connecting to backend stream socket...");
+
+        socket.on('connect', () => {
+            console.log("Successfully connected to the backend notification server!");
         });
 
-        async function processQueue() {
-            if (queue.length === 0) return;
+        // Listen for the event emitted by server.js
+        socket.on('triggerTTS', (data) => {
+            console.log("[Received Audio Request]:", data);
+            audioQueue.push(data);
+            processQueue();
+        });
+
+        function processQueue() {
+            // If an audio track is currently playing or the queue is completely empty, halt.
+            if (isPlaying || audioQueue.length === 0) return;
+
             isPlaying = true;
+            const currentJob = audioQueue.shift();
+
+            // 1. Create and show the visual alert popup
+            const container = document.getElementById('tts-alert-container');
+            const alertEl = document.createElement('div');
+            alertEl.className = 'tts-alert';
             
-            const current = queue.shift();
+            // Customize label colors dynamically based on the voice triggered
+            if (currentJob.voice === 'trump') alertEl.style.borderLeftColor = '#1565c0';
+            if (currentJob.voice === 'speed') alertEl.style.borderLeftColor = '#cc0000';
+            if (currentJob.voice === 'riley') alertEl.style.borderLeftColor = '#ffeb3b';
+
+            alertEl.innerHTML = `<span class="username">${currentJob.user}</span> made <span class="voice-name">${currentJob.voice}</span> say:<br>"${currentJob.text}"`;
+            container.appendChild(alertEl);
+
+            // Trigger animation frame trigger
+            setTimeout(() => alertEl.classList.add('show'), 50);
+
+            // 2. Instantiate and play the public FakeYou audio file
+            const audio = new Audio(currentJob.audioUrl);
             
-            voiceLabel.innerText = `Speaking: ${current.voice.toUpperCase()}`;
-            userLabel.innerText = current.user;
-            
-            popup.classList.add('show');
-            await new Promise(r => setTimeout(r, 600));
-            
-            await new Promise((resolve) => {
-                if (current.audioUrl) {
-                    // Play the actual deepfake audio from FakeYou
-                    const audio = new Audio(current.audioUrl);
-                    audio.onended = resolve;
-                    audio.onerror = resolve; 
-                    audio.play();
-                } else {
-                    // Failsafe: Play robot voice if FakeYou glitches
-                    const utterance = new SpeechSynthesisUtterance(current.text);
-                    utterance.onend = resolve;
-                    utterance.onerror = resolve; 
-                    window.speechSynthesis.speak(utterance);
-                }
+            audio.play().catch(err => {
+                console.error("Audio playback blocked or failed:", err);
+                // Force skip if audio fails to play so queue doesn't lock up
+                removeAlertAndContinue(alertEl);
             });
 
-            await new Promise(r => setTimeout(r, 2000));
-            popup.classList.remove('show');
-            
+            audio.onended = () => {
+                removeAlertAndContinue(alertEl);
+            };
+        }
+
+        function removeAlertAndContinue(element) {
+            element.classList.remove('show');
+            // Wait for slide-out CSS transition animation to finish before destroying the element
             setTimeout(() => {
+                element.remove();
                 isPlaying = false;
-                processQueue();
-            }, 1000);
+                // Add a small 400ms breather window before starting the next clip in queue
+                setTimeout(processQueue, 400); 
+            }, 400);
         }
     </script>
 </body>
