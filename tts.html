@@ -9,7 +9,7 @@
         body {
             margin: 0;
             padding: 0;
-            background: transparent; /* Kept transparent for OBS Browser Source */
+            background: transparent;
             overflow: hidden;
             font-family: 'Arial', sans-serif;
         }
@@ -61,11 +61,8 @@
     <div id="tts-alert-container"></div>
 
     <script>
-        // CHANGE THIS to your live backend URL on Render (e.g., https://your-app.onrender.com)
-        // Leave it as "/" if the HTML file is being hosted directly by the same Node server.
-        const BACKEND_URL = "/"; 
-
-        const socket = io(BACKEND_URL);
+        // Clean, automatic connection since it lives in the backend folder
+        const socket = io(); 
         
         let audioQueue = [];
         let isPlaying = false;
@@ -76,7 +73,6 @@
             console.log("Successfully connected to the backend notification server!");
         });
 
-        // Listen for the event emitted by server.js
         socket.on('triggerTTS', (data) => {
             console.log("[Received Audio Request]:", data);
             audioQueue.push(data);
@@ -84,18 +80,15 @@
         });
 
         function processQueue() {
-            // If an audio track is currently playing or the queue is completely empty, halt.
             if (isPlaying || audioQueue.length === 0) return;
 
             isPlaying = true;
             const currentJob = audioQueue.shift();
 
-            // 1. Create and show the visual alert popup
             const container = document.getElementById('tts-alert-container');
             const alertEl = document.createElement('div');
             alertEl.className = 'tts-alert';
             
-            // Customize label colors dynamically based on the voice triggered
             if (currentJob.voice === 'trump') alertEl.style.borderLeftColor = '#1565c0';
             if (currentJob.voice === 'speed') alertEl.style.borderLeftColor = '#cc0000';
             if (currentJob.voice === 'riley') alertEl.style.borderLeftColor = '#ffeb3b';
@@ -103,15 +96,12 @@
             alertEl.innerHTML = `<span class="username">${currentJob.user}</span> made <span class="voice-name">${currentJob.voice}</span> say:<br>"${currentJob.text}"`;
             container.appendChild(alertEl);
 
-            // Trigger animation frame trigger
             setTimeout(() => alertEl.classList.add('show'), 50);
 
-            // 2. Instantiate and play the public FakeYou audio file
             const audio = new Audio(currentJob.audioUrl);
             
             audio.play().catch(err => {
                 console.error("Audio playback blocked or failed:", err);
-                // Force skip if audio fails to play so queue doesn't lock up
                 removeAlertAndContinue(alertEl);
             });
 
@@ -122,11 +112,9 @@
 
         function removeAlertAndContinue(element) {
             element.classList.remove('show');
-            // Wait for slide-out CSS transition animation to finish before destroying the element
             setTimeout(() => {
                 element.remove();
                 isPlaying = false;
-                // Add a small 400ms breather window before starting the next clip in queue
                 setTimeout(processQueue, 400); 
             }, 400);
         }
