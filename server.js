@@ -50,31 +50,80 @@ setInterval(async () => {
 }, 60000);
 
 // --- DUAL-PROCESSING LOGIC (Leaderboard + TTS) ---
-function processMessage(user, messageContent) {
+function processMessage(user, messageContent, tags = null) {
     const cleanUser = user.toLowerCase().trim();
-    
-    // 1. Check for TTS Commands FIRST (So you and bots can still trigger them)
-    if (messageContent) {
-        const text = messageContent.trim();
-        if (text.startsWith('!')) {
-            const parts = text.split(' ');
-            const command = parts[0].toLowerCase(); 
-            const spokenText = parts.slice(1).join(' '); 
+    if (!messageContent) return;
 
-            const validVoices = ['!speed', '!trump', '!kanye'];
-            
-            if (validVoices.includes(command) && spokenText.length > 0) {
-                const voiceName = command.replace('!', ''); 
-                io.emit('triggerTTS', { user: cleanUser, voice: voiceName, text: spokenText });
-                console.log(`TTS Triggered: ${cleanUser} as ${voiceName} -> ${spokenText}`);
+    let rawText = messageContent.trim();
+    
+    // If it's not a TTS command, handle normal leaderboard points and exit
+    if (!rawText.startsWith('!')) {
+        if (defaultIgnored.includes(cleanUser)) return;
+        trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
+        const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
+        io.emit('updateLeaderboard', top3);
+        return;
+    }
+
+    // Process commands
+    const parts = rawText.split(' ');
+    const command = parts[0].toLowerCase();
+    const validVoices = ['!speed', '!trump', '!kanye'];
+
+    if (validVoices.includes(command)) {
+        let spokenText = parts.slice(1).join(' ');
+
+        // 1. Strip Twitch Native Emotes using exact index positions
+        if (tags && tags.emotes) {
+            let positions = [];
+            Object.values(tags.emotes).forEach(ranges => {
+                ranges.forEach(range => {
+                    const [start, end] = range.split('-').map(Number);
+                    positions.push({ start, end });
+                });
+            });
+            // Sort descending to cut from back to front without breaking index orders
+            positions.sort((a, b) => b.start - a.start);
+            let msgArr = messageContent.split('');
+            positions.forEach(pos => {
+                msgArr.splice(pos.start, pos.end - pos.start + 1);
+            });
+            let clearedMsg = msgArr.join('');
+            let clearedParts = clearedMsg.trim().split(' ');
+            spokenText = clearedParts.slice(1).join(' ');
+        }
+
+        // 2. Strip Kick Native Emotes: [emote:id:name]
+        spokenText = spokenText.replace(/\[emote:\d+:[^\]]+\]/gi, '');
+
+        // 3. Strip Graphic Unicode Emojis
+        spokenText = spokenText.replace(/[\u{1F300}-\u{1FAFF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]/gu, '');
+
+        // 4. Collapse 3+ repeated characters/numbers inside words (aaaaa -> a, 11111 -> 1)
+        spokenText = spokenText.replace(/(.)\1{2,}/gu, '$1');
+
+        // 5. Collapse consecutive duplicated words (hello hello hello -> hello)
+        let words = spokenText.split(/\s+/);
+        let cleanedWords = [];
+        for (let i = 0; i < words.length; i++) {
+            if (i > 0 && words[i].toLowerCase() === words[i-1].toLowerCase() && words[i].trim() !== '') {
+                continue;
             }
+            cleanedWords.push(words[i]);
+        }
+        spokenText = cleanedWords.join(' ');
+        spokenText = spokenText.trim();
+
+        // Only trigger the alert if there's real speakable text remaining
+        if (spokenText.length > 0) {
+            const voiceName = command.replace('!', ''); 
+            io.emit('triggerTTS', { user: cleanUser, voice: voiceName, text: spokenText });
+            console.log(`TTS Triggered: ${cleanUser} as ${voiceName} -> ${spokenText}`);
         }
     }
 
-    // 2. Stop here if the user is ignored (Prevents streamer/bots from hitting leaderboard)
+    // Track points for valid command triggers if they aren't on the ignore list
     if (defaultIgnored.includes(cleanUser)) return;
-    
-    // 3. Update Leaderboard
     trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
     const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
     io.emit('updateLeaderboard', top3);
@@ -86,7 +135,7 @@ twitchClient.connect().catch(console.error);
 
 twitchClient.on('message', (channel, tags, message, self) => {
     if (self) return;
-    processMessage(tags.username, message); 
+    processMessage(tags.username, message, tags); 
 });
 
 // NATIVE KICK CHAT (Pure WebSocket)
