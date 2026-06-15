@@ -23,7 +23,7 @@ if (MONGO_URI) {
         .then(() => console.log('Successfully connected to MongoDB Cloud Database.'))
         .catch(err => console.error('MongoDB connection error:', err));
 } else {
-    console.warn("WARNING: No MONGO_URI found. Data will not be saved permanently.");
+    mongoose.warn("WARNING: No MONGO_URI found. Data will not be saved permanently.");
 }
 
 const UserScore = mongoose.model('UserScore', new mongoose.Schema({
@@ -68,7 +68,7 @@ function processMessage(user, messageContent, tags = null) {
     // Process commands
     const parts = rawText.split(' ');
     const command = parts[0].toLowerCase();
-    const validVoices = ['!speed', '!trump', '!kanye'];
+    const validVoices = ['!tts'];
 
     if (validVoices.includes(command)) {
         let spokenText = parts.slice(1).join(' ');
