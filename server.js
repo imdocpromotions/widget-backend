@@ -6,10 +6,11 @@ const cron = require('node-cron');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const WebSocket = require('ws'); 
-const https = require('https'); 
+const https = require('https'); // ADDED: Required for FakeYou API
 
 const app = express();
 app.use(cors());
+app.use(express.static(__dirname)); // ADDED: Allows Render to show your tts.html file
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
@@ -25,6 +26,7 @@ const FAKEYOU_MODELS = {
 
 // --- MongoDB Database Setup ---
 const MONGO_URI = process.env.MONGO_URI; 
+
 if (MONGO_URI) {
     mongoose.connect(MONGO_URI)
         .then(() => console.log('Successfully connected to MongoDB Cloud Database.'))
@@ -39,16 +41,21 @@ const UserScore = mongoose.model('UserScore', new mongoose.Schema({
 }));
 
 UserScore.find().then(users => {
-    users.forEach(u => trackingData[u.username] = u.score);
+    users.forEach(u => {
+        trackingData[u.username] = u.score;
+    });
     console.log("Loaded saved leaderboard data from the cloud.");
 }).catch(console.error);
 
 setInterval(async () => {
     if (!MONGO_URI || Object.keys(trackingData).length === 0) return;
+    
     const bulkOps = Object.entries(trackingData).map(([username, score]) => ({
         updateOne: { filter: { username }, update: { username, score }, upsert: true }
     }));
-    try { await UserScore.bulkWrite(bulkOps); } catch (error) {}
+    
+    try { await UserScore.bulkWrite(bulkOps); } 
+    catch (error) { console.error("Error saving to database:", error); }
 }, 60000);
 
 // --- HTTPS HELPER FOR FAKEYOU ---
@@ -78,7 +85,6 @@ async function generateFakeYouAudio(voiceName, text, username) {
     const model = FAKEYOU_MODELS[voiceName];
     if (!model) return;
     
-    // Create random job ID
     const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
         const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
@@ -97,7 +103,6 @@ async function generateFakeYouAudio(voiceName, text, username) {
         const jobToken = postRes.inference_job_token;
         let attempts = 0;
         
-        // Polls the API every 3 seconds to see if your audio is done
         while (attempts < 30) { 
             await new Promise(r => setTimeout(r, 3000)); 
             const pollRes = await fakeYouFetch('GET', `/tts/job/${jobToken}`);
@@ -130,6 +135,7 @@ function processMessage(user, messageContent, tags = null) {
 
     let rawText = messageContent.trim();
     
+    // If it's not a TTS command, handle normal leaderboard points and exit
     if (!rawText.startsWith('!')) {
         if (defaultIgnored.includes(cleanUser)) return;
         trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
@@ -138,15 +144,17 @@ function processMessage(user, messageContent, tags = null) {
         return;
     }
 
+    // Process commands
     const parts = rawText.split(' ');
     const command = parts[0].toLowerCase();
     
-    // UPDATED: Now looks for riley instead of kanye
+    // UPDATED: Swapped kanye for riley based on your tokens
     const validVoices = ['!speed', '!trump', '!riley'];
 
     if (validVoices.includes(command)) {
         let spokenText = parts.slice(1).join(' ');
 
+        // 1. Strip Twitch Native Emotes using exact index positions
         if (tags && tags.emotes) {
             let positions = [];
             Object.values(tags.emotes).forEach(ranges => {
@@ -157,35 +165,50 @@ function processMessage(user, messageContent, tags = null) {
             });
             positions.sort((a, b) => b.start - a.start);
             let msgArr = messageContent.split('');
-            positions.forEach(pos => msgArr.splice(pos.start, pos.end - pos.start + 1));
-            let clearedParts = msgArr.join('').trim().split(' ');
+            positions.forEach(pos => {
+                msgArr.splice(pos.start, pos.end - pos.start + 1);
+            });
+            let clearedMsg = msgArr.join('');
+            let clearedParts = clearedMsg.trim().split(' ');
             spokenText = clearedParts.slice(1).join(' ');
         }
 
+        // 2. Strip Kick Native Emotes: [emote:id:name]
         spokenText = spokenText.replace(/\[emote:\d+:[^\]]+\]/gi, '');
+
+        // 3. Strip Graphic Unicode Emojis
         spokenText = spokenText.replace(/[\u{1F300}-\u{1FAFF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]/gu, '');
+
+        // 4. Collapse 3+ repeated characters/numbers inside words
         spokenText = spokenText.replace(/(.)\1{2,}/gu, '$1');
 
+        // 5. Collapse consecutive duplicated words
         let words = spokenText.split(/\s+/);
         let cleanedWords = [];
         for (let i = 0; i < words.length; i++) {
-            if (i > 0 && words[i].toLowerCase() === words[i-1].toLowerCase() && words[i].trim() !== '') continue;
+            if (i > 0 && words[i].toLowerCase() === words[i-1].toLowerCase() && words[i].trim() !== '') {
+                continue;
+            }
             cleanedWords.push(words[i]);
         }
-        spokenText = cleanedWords.join(' ').trim();
+        spokenText = cleanedWords.join(' ');
+        spokenText = spokenText.trim();
 
+        // REPLACED: Normal TTS trigger is now the FakeYou AI trigger
         if (spokenText.length > 0) {
             const voiceName = command.replace('!', ''); 
             generateFakeYouAudio(voiceName, spokenText, cleanUser);
         }
     }
 
+    // Track points for valid command triggers if they aren't on the ignore list
     if (defaultIgnored.includes(cleanUser)) return;
     trackingData[cleanUser] = (trackingData[cleanUser] || 0) + 1;
     const top3 = Object.entries(trackingData).sort(([, a], [, b]) => b - a).slice(0, 3);
     io.emit('updateLeaderboard', top3);
 }
 
+// TWITCH CLIENT SETUP
 const twitchClient = new tmi.Client({ identity: { username: 'justinfan12345' }, channels: ['imdoclive'] });
 twitchClient.connect().catch(console.error);
 
@@ -194,6 +217,7 @@ twitchClient.on('message', (channel, tags, message, self) => {
     processMessage(tags.username, message, tags); 
 });
 
+// NATIVE KICK CHAT (Pure WebSocket)
 const KICK_CHATROOM_ID = '386930'; 
 const kickWs = new WebSocket('wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false');
 
@@ -215,7 +239,9 @@ kickWs.on('message', (raw) => {
                 processMessage(payload.sender.username, payload.content); 
             }
         }
-    } catch (err) {}
+    } catch (err) {
+        console.error("Error parsing Kick websocket message:", err);
+    }
 });
 
 io.on('connection', (socket) => {
