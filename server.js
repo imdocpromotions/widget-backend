@@ -17,11 +17,10 @@ let trackingData = {};
 const defaultIgnored = ['imdoclive', 'botrix', 'botrixoficial', '@botrixoficial', 'kickbot', 'hugomcnut', 'missxss'];
 
 // --- FAKEYOU API VOICE TOKENS ---
-// These are the specific character IDs. You can swap these later by finding new models on FakeYou.com
 const FAKEYOU_MODELS = {
-    'speed': 'TM:y76q83dcv6ap', 
-    'trump': 'TM:cx6k9k0j7zcw', 
-    'kanye': 'TM:3v1605nmpbme'  
+    'speed': 'weight_msq6440ch8hj862nz5y255n8j', 
+    'trump': 'weight_ppqs5038bvkm6wc29w0xfebzy', 
+    'riley': 'weight_6kgfe08hzee1x3gfh5dpcehvh'  
 };
 
 // --- MongoDB Database Setup ---
@@ -141,7 +140,9 @@ function processMessage(user, messageContent, tags = null) {
 
     const parts = rawText.split(' ');
     const command = parts[0].toLowerCase();
-    const validVoices = ['!speed', '!trump', '!kanye'];
+    
+    // UPDATED: Now looks for riley instead of kanye
+    const validVoices = ['!speed', '!trump', '!riley'];
 
     if (validVoices.includes(command)) {
         let spokenText = parts.slice(1).join(' ');
@@ -175,7 +176,6 @@ function processMessage(user, messageContent, tags = null) {
 
         if (spokenText.length > 0) {
             const voiceName = command.replace('!', ''); 
-            // Trigger the AI request
             generateFakeYouAudio(voiceName, spokenText, cleanUser);
         }
     }
