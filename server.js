@@ -6,23 +6,14 @@ const cron = require('node-cron');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const WebSocket = require('ws'); 
-const https = require('https'); // ADDED: Required for FakeYou API
 
 const app = express();
 app.use(cors());
-app.use(express.static(__dirname)); // ADDED: Allows Render to show your tts.html file
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 let trackingData = {}; 
 const defaultIgnored = ['imdoclive', 'botrix', 'botrixoficial', '@botrixoficial', 'kickbot', 'hugomcnut', 'missxss'];
-
-// --- FAKEYOU API VOICE TOKENS ---
-const FAKEYOU_MODELS = {
-    'speed': 'weight_msq6440ch8hj862nz5y255n8j', 
-    'trump': 'weight_ppqs5038bvkm6wc29w0xfebzy', 
-    'riley': 'weight_6kgfe08hzee1x3gfh5dpcehvh'  
-};
 
 // --- MongoDB Database Setup ---
 const MONGO_URI = process.env.MONGO_URI; 
@@ -58,76 +49,6 @@ setInterval(async () => {
     catch (error) { console.error("Error saving to database:", error); }
 }, 60000);
 
-// --- HTTPS HELPER FOR FAKEYOU ---
-function fakeYouFetch(method, path, body = null) {
-    return new Promise((resolve, reject) => {
-        const options = {
-            hostname: 'api.fakeyou.com',
-            path: path,
-            method: method,
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }
-        };
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try { resolve(JSON.parse(data)); } catch (e) { resolve(null); }
-            });
-        });
-        req.on('error', reject);
-        if (body) req.write(JSON.stringify(body));
-        req.end();
-    });
-}
-
-// --- FAKEYOU AUDIO GENERATOR ---
-async function generateFakeYouAudio(voiceName, text, username) {
-    const model = FAKEYOU_MODELS[voiceName];
-    if (!model) return;
-    
-    const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
-
-    console.log(`[FakeYou] Sending "${text}" to ${voiceName}... (Waiting in queue)`);
-    try {
-        const postRes = await fakeYouFetch('POST', '/tts/inference', {
-            tts_model_token: model,
-            uuid_idempotency_token: uuid,
-            inference_text: text
-        });
-        
-        if (!postRes || !postRes.success) return console.log("[FakeYou] Error starting job.");
-        
-        const jobToken = postRes.inference_job_token;
-        let attempts = 0;
-        
-        while (attempts < 30) { 
-            await new Promise(r => setTimeout(r, 3000)); 
-            const pollRes = await fakeYouFetch('GET', `/tts/job/${jobToken}`);
-            
-            if (pollRes && pollRes.state) {
-                const status = pollRes.state.status;
-                if (status === 'complete_success') {
-                    const path = pollRes.state.maybe_public_bucket_wav_audio_path || pollRes.state.maybe_public_bucket_media_path;
-                    const audioUrl = path.startsWith('http') ? path : 'https://storage.fakeyou.com' + path;
-                    
-                    io.emit('triggerTTS', { user: username, voice: voiceName, text: text, audioUrl: audioUrl });
-                    console.log(`[FakeYou] Success! Sent audio link to OBS.`);
-                    return;
-                } else if (status === 'dead' || status === 'canceled') {
-                    return console.log("[FakeYou] Job failed or was canceled by server.");
-                }
-            }
-            attempts++;
-        }
-        console.log("[FakeYou] Timed out waiting for audio.");
-    } catch (err) {
-        console.error("[FakeYou] API Error:", err);
-    }
-}
-
 // --- DUAL-PROCESSING LOGIC (Leaderboard + TTS) ---
 function processMessage(user, messageContent, tags = null) {
     const cleanUser = user.toLowerCase().trim();
@@ -147,9 +68,7 @@ function processMessage(user, messageContent, tags = null) {
     // Process commands
     const parts = rawText.split(' ');
     const command = parts[0].toLowerCase();
-    
-    // UPDATED: Swapped kanye for riley based on your tokens
-    const validVoices = ['!speed', '!trump', '!riley'];
+    const validVoices = ['!speed', '!trump', '!kanye'];
 
     if (validVoices.includes(command)) {
         let spokenText = parts.slice(1).join(' ');
@@ -163,6 +82,7 @@ function processMessage(user, messageContent, tags = null) {
                     positions.push({ start, end });
                 });
             });
+            // Sort descending to cut from back to front without breaking index orders
             positions.sort((a, b) => b.start - a.start);
             let msgArr = messageContent.split('');
             positions.forEach(pos => {
@@ -179,10 +99,10 @@ function processMessage(user, messageContent, tags = null) {
         // 3. Strip Graphic Unicode Emojis
         spokenText = spokenText.replace(/[\u{1F300}-\u{1FAFF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]/gu, '');
 
-        // 4. Collapse 3+ repeated characters/numbers inside words
+        // 4. Collapse 3+ repeated characters/numbers inside words (aaaaa -> a, 11111 -> 1)
         spokenText = spokenText.replace(/(.)\1{2,}/gu, '$1');
 
-        // 5. Collapse consecutive duplicated words
+        // 5. Collapse consecutive duplicated words (hello hello hello -> hello)
         let words = spokenText.split(/\s+/);
         let cleanedWords = [];
         for (let i = 0; i < words.length; i++) {
@@ -194,10 +114,11 @@ function processMessage(user, messageContent, tags = null) {
         spokenText = cleanedWords.join(' ');
         spokenText = spokenText.trim();
 
-        // REPLACED: Normal TTS trigger is now the FakeYou AI trigger
+        // Only trigger the alert if there's real speakable text remaining
         if (spokenText.length > 0) {
             const voiceName = command.replace('!', ''); 
-            generateFakeYouAudio(voiceName, spokenText, cleanUser);
+            io.emit('triggerTTS', { user: cleanUser, voice: voiceName, text: spokenText });
+            console.log(`TTS Triggered: ${cleanUser} as ${voiceName} -> ${spokenText}`);
         }
     }
 
