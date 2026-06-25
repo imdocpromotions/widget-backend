@@ -33,9 +33,16 @@ const UserScore = mongoose.model('UserScore', new mongoose.Schema({
 
 UserScore.find().then(users => {
     users.forEach(u => {
+        // Automatically skip anyone on the ignore list so they don't load into active memory
+        if (defaultIgnored.includes(u.username.toLowerCase())) return;
+        
         trackingData[u.username] = u.score;
     });
     console.log("Loaded saved leaderboard data from the cloud.");
+    
+    // Automatically purge ignored users from the database so they are permanently removed
+    UserScore.deleteMany({ username: { $in: defaultIgnored } }).catch(console.error);
+    
 }).catch(console.error);
 
 setInterval(async () => {
