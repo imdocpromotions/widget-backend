@@ -13,7 +13,7 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 let trackingData = {}; 
-const defaultIgnored = ['imdoclive', 'botrix', 'botrixoficial', '@botrixoficial', 'kickbot', 'hugomcnut', '@missxss'];
+const defaultIgnored = ['imdoclive', 'botrix', 'botrixoficial', '@botrixoficial', 'kickbot', 'hugomcnut', '@missxss', '@imdocbot', 'imdocbot'];
 
 // --- MongoDB Database Setup ---
 const MONGO_URI = process.env.MONGO_URI; 
